@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block content %}
+<h2>Edit Program</h2>
+<form method="post" enctype="multipart/form-data" style="max-width:520px">
+  {% csrf_token %}
+  <label>Part No</label>{{ form.part_no }}
+  <label>Revision</label>{{ form.revision }}
+  <label>Replace file (optional)</label>{{ form.file }}
+  <div style="margin-top:1rem"><button class="btn">Save</button></div>
+</form>
+{% endblock %}

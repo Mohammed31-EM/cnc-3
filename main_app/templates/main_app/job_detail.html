@@ -1,0 +1,30 @@
+{% extends "base.html" %}{% block content %}
+<h2>Job #{{ object.id }} — {{ object.program.part_no }} {{ object.program.revision }}</h2>
+<p>Status: <strong>{{ object.status }}</strong> • Qty: {{ object.qty }} • WCS: {{ object.wcs }}</p>
+<p>Machine: {{ object.machine.name }} • Material: {{ object.material.name }}</p>
+<p>Stock: {{ object.stock_lwh_mm }}</p>
+<p>Program est: {{ object.program.est_time_s|floatformat:1 }} s • BBox: {{ object.program.bbox_json }}</p>
+
+<p>
+  <a class="btn" href="{% url 'job_packet' object.pk %}">Setup Sheet</a>
+  {% if object.owner_id == request.user.id and object.status == "draft" %}
+    <a class="btn" href="{% url 'job_submit' object.pk %}">Submit</a>
+  {% endif %}
+  {% if object.owner_id == request.user.id and object.status == "submitted" %}
+    <a class="btn" href="{% url 'job_approve' object.pk %}">Approve</a>
+  {% endif %}
+  {% if object.owner_id == request.user.id %}
+    <a class="btn" href="{% url 'job_edit' object.pk %}">Edit</a>
+    <a class="btn" href="{% url 'job_delete' object.pk %}">Delete</a>
+  {% endif %}
+</p>
+
+<h3>Activity</h3>
+<ul>
+  {% for log in object.logs.all %}
+    <li>{{ log.ts }} — {{ log.user.username }} — {{ log.action }} {{ log.notes }}</li>
+  {% empty %}
+    <li>No activity yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

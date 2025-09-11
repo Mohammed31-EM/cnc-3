@@ -1,0 +1,38 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CNC-3</title>
+<style>
+:root{--bg:#0f172a;--panel:#0b1220;--text:#e5e7eb;--blue:#3b82f6}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui}
+a{color:var(--blue);text-decoration:none}
+.wrap{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+nav{background:var(--panel);padding:16px}
+nav a{display:block;padding:8px;border-radius:8px}
+nav a:hover{background:#111a2c}
+main{padding:20px}
+.btn{background:var(--blue);color:#fff;padding:.5rem .75rem;border-radius:.5rem}
+input{background:#0b1220;color:#e5e7eb;border:1px solid #1f2937;border-radius:6px;padding:.5rem}
+label{display:block;margin:.5rem 0 .25rem}
+.link-btn{background:none;border:none;color:var(--blue);padding:0;cursor:pointer;font:inherit}
+.link-btn:hover{text-decoration:underline}
+</style></head><body>
+<div class="wrap">
+  <nav>
+    <h2>CNC-3</h2>
+    <a href="{% url 'program_list' %}">Programs</a>
+    <a href="{% url 'job_list' %}">Jobs</a>
+
+    {% if request.user.is_authenticated %}
+      <div style="margin-top:1rem;">Hi, {{request.user.username}} •
+        <form method="post" action="{% url 'logout' %}" style="display:inline">
+          {% csrf_token %}
+          <button type="submit" class="link-btn">Logout</button>
+        </form>
+      </div>
+    {% else %}
+      <a href="{% url 'login' %}">Login</a>
+    {% endif %}
+  </nav>
+  <main>{% block content %}{% endblock %}</main>
+</div>
+</body></html>

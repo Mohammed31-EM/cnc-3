@@ -1,0 +1,139 @@
+{% extends "base.html" %}{% block content %}
+<h2>{{ object.part_no }} {{ object.revision }}</h2>
+<p>Units: {{ object.units }} • Mode: {{ object.abs_mode|yesno:"ABS,INC" }}</p>
+<p>BBox: {{ object.bbox_json }} • Est: {{ object.est_time_s|floatformat:1 }} s</p>
+
+<a class="btn" href="{% url 'job_new_for_program' object.pk %}">Create Job</a>
+
+{% if object.meta_json.lints %}
+  <h3>Warnings</h3>
+  <ul>
+    {% for l in object.meta_json.lints %}
+      <li>{{ l.code }} — {{ l.msg }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<div style="margin:.75rem 0; display:flex; gap:1rem; align-items:center; flex-wrap:wrap">
+  <label><input id="tog-rapids" type="checkbox" checked> Show rapids</label>
+  <label><input id="tog-grid" type="checkbox" checked> Show grid</label>
+  <label>Progress <input id="scrub" type="range" min="0" max="100" value="100" style="vertical-align:middle"></label>
+  <button id="reset" class="btn" type="button">Reset view</button>
+</div>
+
+<canvas id="plot" width="900" height="600"
+  style="background:#0b1220;border:1px solid #1f2937"
+  aria-label="Toolpath preview"></canvas>
+
+<script>
+(async ()=>{
+  const res = await fetch("{% url 'program_preview_json' object.pk %}");
+  const {segments,bbox} = await res.json();
+
+  const c = document.getElementById('plot'), ctx = c.getContext('2d');
+  const showRapids = document.getElementById('tog-rapids');
+  const showGrid   = document.getElementById('tog-grid');
+  const scrub      = document.getElementById('scrub');
+  const resetBtn   = document.getElementById('reset');
+
+  const m=20; // margin
+  const w=c.width-2*m, h=c.height-2*m;
+  const sx=Math.max(1e-9, bbox.xmax-bbox.xmin),
+        sy=Math.max(1e-9, bbox.ymax-bbox.ymin);
+
+  // view transform state
+  const baseScale = 0.9*Math.min(w/sx, h/sy);
+  let zoom = 1.0, panX = 0.0, panY = 0.0;
+
+  function toScreen(x,y){
+    const X = m + ((x - bbox.xmin)*baseScale*zoom + panX);
+    const Y = c.height - (m + ((y - bbox.ymin)*baseScale*zoom + panY));
+    return [X,Y];
+  }
+  function worldStep(){
+    // pick a “nice” grid step in world units, ~10 lines across current view
+    const vr = Math.max(sx, sy) / zoom;
+    const raw = vr/10;
+    const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+    const m2 = raw/pow < 2 ? 1 : raw/pow < 5 ? 2 : 5;
+    return m2 * pow;
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,c.width,c.height);
+
+    // frame
+    ctx.strokeStyle="#334155";
+    ctx.lineWidth=1; ctx.setLineDash([]);
+    ctx.strokeRect(m,m,w,h);
+
+    // grid
+    if(showGrid.checked){
+      const step = worldStep();
+      ctx.lineWidth=1; ctx.setLineDash([]);
+      ctx.strokeStyle="#1f2937";
+      for(let gx=Math.ceil(bbox.xmin/step)*step; gx<=bbox.xmax; gx+=step){
+        const [x1,y1]=toScreen(gx,bbox.ymin), [x2,y2]=toScreen(gx,bbox.ymax);
+        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      }
+      for(let gy=Math.ceil(bbox.ymin/step)*step; gy<=bbox.ymax; gy+=step){
+        const [x1,y1]=toScreen(bbox.xmin,gy), [x2,y2]=toScreen(bbox.xmax,gy);
+        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      }
+    }
+
+    // toolpath
+    const pct = parseInt(scrub.value,10)/100;
+    const N = Math.max(0, Math.min(segments.length, Math.floor(segments.length*pct)));
+
+    for(let i=0;i<N;i++){
+      const s = segments[i];
+      if(s.k==="G0" && !showRapids.checked) continue;
+      const [x1,y1] = toScreen(s.frm[0], s.frm[1]);
+      const [x2,y2] = toScreen(s.to[0],  s.to[1]);
+      ctx.beginPath();
+      ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+      ctx.lineWidth = s.k==="G0"?1:2;
+      ctx.setLineDash(s.k==="G0"?[4,4]:[]);
+      ctx.strokeStyle = s.k==="G0" ? "#64748b" : "#60a5fa";
+      ctx.stroke();
+    }
+  }
+
+  // zoom around mouse
+  c.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    const rect = c.getBoundingClientRect();
+    const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+    // world coords under cursor before zoom
+    const wx = ((cx - m) - panX)/(baseScale*zoom) + bbox.xmin;
+    const wy = ((c.height - cy - m) - panY)/(baseScale*zoom) + bbox.ymin;
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    zoom = Math.max(0.1, Math.min(10, zoom*factor));
+    // keep the point under cursor fixed
+    panX = (cx - m) - (wx - bbox.xmin)*baseScale*zoom;
+    panY = (c.height - cy - m) - (wy - bbox.ymin)*baseScale*zoom;
+    draw();
+  }, {passive:false});
+
+  // pan with drag
+  let dragging=false, lastX=0, lastY=0;
+  c.addEventListener('mousedown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; });
+  window.addEventListener('mouseup', ()=>{ dragging=false; });
+  window.addEventListener('mousemove', e=>{
+    if(!dragging) return;
+    const dx=e.clientX-lastX, dy=e.clientY-lastY;
+    panX += dx; panY -= dy; // invert y
+    lastX=e.clientX; lastY=e.clientY;
+    draw();
+  });
+
+  resetBtn.addEventListener('click', ()=>{ zoom=1; panX=0; panY=0; draw(); });
+  showRapids.addEventListener('change', draw);
+  showGrid.addEventListener('change', draw);
+  scrub.addEventListener('input', draw);
+
+  draw();
+})();
+</script>
+{% endblock %}

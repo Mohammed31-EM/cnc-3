@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Upload Program</h2>
+
+  <form method="post" enctype="multipart/form-data" aria-describedby="upload-help">
+    {% csrf_token %}
+
+    <p id="upload-help" style="opacity:.8">
+      Accepted files: <code>.nc</code>, <code>.gcode</code>, <code>.tap</code>, <code>.txt</code>
+    </p>
+
+    <label for="part_no">Part No</label>
+    <input id="part_no" name="part_no" required value="{{ request.POST.part_no|default:'' }}">
+
+    <label for="revision">Revision</label>
+    <input id="revision" name="revision" value="{{ request.POST.revision|default:'' }}">
+
+    <label for="file">G-code File</label>
+    <input id="file" type="file" name="file" accept=".nc,.gcode,.tap,.txt" required>
+
+    <div style="margin-top:1rem">
+      <button class="btn" type="submit">Upload</button>
+      <a class="btn" href="{% url 'program_list' %}" style="margin-left:.5rem">Cancel</a>
+    </div>
+  </form>
+{% endblock %}

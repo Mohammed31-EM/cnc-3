@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Programs</h2>
+  <p><a class="btn" href="{% url 'program_new' %}">Upload Program</a></p>
+
+  <ul>
+    {% for p in programs|default:object_list %}
+      <li>
+        <a href="{% url 'program_detail' p.pk %}">
+          {{ p.part_no }}{% if p.revision %} {{ p.revision }}{% endif %}
+        </a>
+        — {{ p.units }} • est {{ p.est_time_s|floatformat:1 }} s
+        {% if p.created_at %}<span style="opacity:.7"> • {{ p.created_at|date:"Y-m-d H:i" }}</span>{% endif %}
+      </li>
+    {% empty %}
+      <li>No programs yet. <a class="btn" href="{% url 'program_new' %}">Upload one</a></li>
+    {% endfor %}
+  </ul>
+{% endblock %}

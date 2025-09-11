@@ -1,0 +1,36 @@
+<!doctype html><html><head>
+<meta charset="utf-8"><title>Setup Sheet — Job #{{ job.id }}</title>
+<style>
+  body{font:14px/1.4 system-ui; padding:24px}
+  h1{margin:0 0 8px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .box{border:1px solid #ccc;padding:12px;border-radius:8px}
+  @media print { .no-print{display:none} body{color:#000} }
+</style>
+</head><body>
+<div class="no-print"><button onclick="print()">Print</button></div>
+<h1>Setup Sheet — Job #{{ job.id }}</h1>
+<div class="grid">
+  <div class="box">
+    <h3>Program</h3>
+    <p>{{ job.program.part_no }} {{ job.program.revision }}</p>
+    <p>BBox: {{ job.program.bbox_json }}</p>
+    <p>Estimated time: {{ job.program.est_time_s|floatformat:1 }} s</p>
+  </div>
+  <div class="box">
+    <h3>Machine & Material</h3>
+    <p>Machine: {{ job.machine.name }}</p>
+    <p>Material: {{ job.material.name }}</p>
+    <p>WCS: {{ job.wcs }}</p>
+  </div>
+  <div class="box">
+    <h3>Stock</h3>
+    <p>{{ job.stock_lwh_mm }}</p>
+    <p>Quantity: {{ job.qty }}</p>
+  </div>
+  <div class="box">
+    <h3>Safety & Lints</h3>
+    <p>Verify safe Z, clamps clear, coolant/spindle off at end.</p>
+  </div>
+</div>
+</body></html>

@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block content %}
+<h2>{{ view.object|default:"New Job" }}</h2>
+<form method="post">{% csrf_token %}
+  <label>Machine</label>{{ form.machine }}
+  <label>Material</label>{{ form.material }}
+  <label>Stock (JSON L/W/H)</label>{{ form.stock_lwh_mm }}
+  <label>Quantity</label>{{ form.qty }}
+  <label>WCS</label>{{ form.wcs }}
+  {% if form.status %}<label>Status</label>{{ form.status }}{% endif %}
+  <button class="btn" type="submit">Save</button>
+</form>
+{% endblock %}

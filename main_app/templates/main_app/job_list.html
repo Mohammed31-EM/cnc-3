@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block content %}
+<h2>Jobs</h2>
+<ul>
+  {% for j in object_list %}
+    <li>
+      <a href="{% url 'job_detail' j.pk %}">Job #{{ j.id }}</a>
+      — {{ j.program.part_no }} • {{ j.machine.name }} • {{ j.material.name }} •
+      Status: {{ j.status }} • Qty: {{ j.qty }}
+    </li>
+  {% empty %}
+    <li>No jobs yet.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

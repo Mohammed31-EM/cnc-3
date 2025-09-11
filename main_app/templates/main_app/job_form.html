@@ -1,12 +1,13 @@
 {% extends "base.html" %}{% block content %}
-<h2>{{ view.object|default:"New Job" }}</h2>
-<form method="post">{% csrf_token %}
+<h2>{% if object %}Edit Job #{{ object.id }}{% else %}New Job for {{ view.kwargs.program_id|default:"Program" }}{% endif %}</h2>
+<form method="post" style="max-width:520px">
+  {% csrf_token %}
   <label>Machine</label>{{ form.machine }}
   <label>Material</label>{{ form.material }}
-  <label>Stock (JSON L/W/H)</label>{{ form.stock_lwh_mm }}
+  <label>Stock (L/W/H mm as JSON)</label>{{ form.stock_lwh_mm }}
   <label>Quantity</label>{{ form.qty }}
   <label>WCS</label>{{ form.wcs }}
   {% if form.status %}<label>Status</label>{{ form.status }}{% endif %}
-  <button class="btn" type="submit">Save</button>
+  <div style="margin-top:1rem"><button class="btn">Save</button></div>
 </form>
 {% endblock %}

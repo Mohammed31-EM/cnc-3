@@ -1,17 +1,28 @@
 # main_app/views.py
+import os
+import math
+
+from django import forms
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
+from django.db.models import Q
+from django.http import JsonResponse, FileResponse, Http404
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import JsonResponse
 from django.urls import reverse, reverse_lazy
-from .models import Program
-import math
-from django.http import FileResponse, Http404
 from django.utils.text import slugify
-from django import forms
+from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 
 from .models import Program, Job, Machine, Material, RunLog
+import difflib
+from django.views.decorators.http import require_GET
+from django.utils.html import mark_safe
+from django.core.exceptions import PermissionDenied
+
+from .models import ProgramVersion
+
+# --- Upload constraints ---
+ALLOWED_EXT = {".nc", ".gcode", ".tap"}
+MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 # ---- ownership helpers ----
@@ -23,26 +34,59 @@ class OwnerReq(UserPassesTestMixin):
     def test_func(self):
         return self.get_object().owner_id == self.request.user.id
 
+
 # ---- programs ----
 class ProgramList(LoginRequiredMixin, OwnerQS, ListView):
     model = Program
     ordering = ["-created_at"]
+    paginate_by = 10
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        q = self.request.GET.get("q")
+        if q:
+            # FIX: use __icontains (double underscore); and use Q for OR
+            qs = qs.filter(Q(part_no_icontains=q) | Q(revision_icontains=q))
+        return qs
+
 
 class ProgramDetail(LoginRequiredMixin, OwnerReq, DetailView):
     model = Program
 
+
 @login_required
 def program_new(request):
     if request.method == "POST":
-        uploaded = request.FILES["file"]
+        uploaded = request.FILES.get("file")
+        if not uploaded:
+            return render(request, "main_app/program_form.html", {"error": "Please choose a file."})
+
+        # --- validation ---
+        _, ext = os.path.splitext(uploaded.name.lower())
+        if ext not in ALLOWED_EXT:
+            return render(request, "main_app/program_form.html",
+                          {"error": "Unsupported file type. Use .nc, .gcode, or .tap."})
+        if uploaded.size > MAX_BYTES:
+            return render(request, "main_app/program_form.html",
+                          {"error": "File too large (>5MB)."})
+
+        # Create program & save file
         p = Program.objects.create(
             owner=request.user,
             part_no=request.POST.get("part_no") or "UNSET",
             revision=request.POST.get("revision") or "",
             file=uploaded,
         )
-        with open(p.file.path, "r", encoding="utf-8", errors="ignore") as fh:
-            parsed = tiny_parse_gcode(fh)
+
+        # Parse safely; if parse fails, delete the record
+        try:
+            with open(p.file.path, "r", encoding="utf-8", errors="ignore") as fh:
+                parsed = tiny_parse_gcode(fh)
+        except Exception as e:
+            p.delete()
+            return render(request, "main_app/program_form.html",
+                          {"error": f"Failed to parse G-code: {e}"})
+
         p.units = parsed["units"]
         p.abs_mode = parsed["abs"]
         p.bbox_json = parsed["bbox"]
@@ -50,7 +94,9 @@ def program_new(request):
         p.est_time_s = parsed["est_time_s"]
         p.save()
         return redirect(reverse("program_detail", args=[p.pk]))
+
     return render(request, "main_app/program_form.html")
+
 
 @login_required
 def program_preview_json(request, pk):
@@ -58,9 +104,9 @@ def program_preview_json(request, pk):
     with open(p.file.path, "r", encoding="utf-8", errors="ignore") as fh:
         parsed = tiny_parse_gcode(fh)
     return JsonResponse({
-        "segments":   parsed["segments"],        # 2D (XY)
-        "bbox":       parsed["bbox"],            # 2D bbox
-        "segments3d": parsed["segments3d_mm"],   # 3D in mm
+        "segments":   parsed["segments"],        # 2D (XY in original units)
+        "bbox":       parsed["bbox"],            # 2D bbox (original units)
+        "segments3d": parsed["segments3d_mm"],   # 3D in mm for Three.js
         "bbox_mm":    parsed["bbox_mm"],         # 3D bbox in mm
     })
 
@@ -76,6 +122,13 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
 
     segs2d    = []   # XY segments (original units) for 2D canvas
     segs3d_mm = []   # 3D segments (mm) for Three.js
+
+    # simple lint flags & counts
+    seen_units = False
+    seen_mode  = False
+    lints = []
+    g0_count = 0
+    g1_count = 0
 
     def bb(px, py, pz):
         bbox["xmin"] = min(bbox["xmin"], px); bbox["xmax"] = max(bbox["xmax"], px)
@@ -94,22 +147,25 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
 
     for raw in fh:
         line = raw.strip()
+        # strip inline comments
         if "(" in line:
             line = line.split("(")[0].strip()
         if not line:
             continue
 
         U = line.upper()
-        if "G20" in U: units = "in"
-        if "G21" in U: units = "mm"
-        if "G90" in U: abs_mode = True
-        if "G91" in U: abs_mode = False
+        if "G20" in U: units = "in"; seen_units = True
+        if "G21" in U: units = "mm"; seen_units = True
+        if "G90" in U: abs_mode = True;  seen_mode = True
+        if "G91" in U: abs_mode = False; seen_mode = True
 
         nx, ny, nz = x, y, z
         code = None
         for t in U.replace(";", " ").split():
-            if t in ("G0","G00"):   code = "G0"
-            elif t in ("G1","G01"): code = "G1"
+            if t in ("G0","G00"):
+                code = "G0"
+            elif t in ("G1","G01"):
+                code = "G1"
             elif t.startswith("X"):
                 v = float(t[1:]); nx = (x + v) if not abs_mode else v
             elif t.startswith("Y"):
@@ -117,22 +173,30 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
             elif t.startswith("Z"):
                 v = float(t[1:]); nz = (z + v) if not abs_mode else v
             elif t.startswith("F"):
-                try: feed = float(t[1:])
-                except ValueError: pass
+                try:
+                    feed = float(t[1:])
+                except ValueError:
+                    pass
 
         if code is None or (nx, ny, nz) == (x, y, z):
             continue
 
-        # 2D XY segment (original units)
+        # counts
+        if code == "G0": g0_count += 1
+        if code == "G1": g1_count += 1
+
+        # 2D XY (original units)
         segs2d.append({"k": code, "frm": [x, y], "to": [nx, ny]})
 
-        # 3D segment (mm)
+        # 3D (mm)
         conv = 25.4 if units == "in" else 1.0
-        segs3d_mm.append({"k": code,
-                          "frm": [x*conv,  y*conv,  z*conv],
-                          "to":  [nx*conv, ny*conv, nz*conv]})
+        segs3d_mm.append({
+            "k": code,
+            "frm": [x*conv,  y*conv,  z*conv],
+            "to":  [nx*conv, ny*conv, nz*conv]
+        })
 
-        # time distances (mm)
+        # timing distances (mm)
         dx, dy, dz = (nx-x)*conv, (ny-y)*conv, (nz-z)*conv
         if code == "G1":
             cut_len += (dx*dx + dy*dy + dz*dz) ** 0.5
@@ -142,6 +206,12 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
 
         x, y, z = nx, ny, nz
         bb(x, y, z); bb_mm(x, y, z, conv)
+
+    # simple lints
+    if not seen_units:
+        lints.append({"code": "L-UNITS", "msg": "No G20/G21 — units unspecified"})
+    if not seen_mode:
+        lints.append({"code": "L-MODE", "msg": "No G90/G91 — distance mode unspecified"})
 
     t_cut   = (cut_len / max(feed, 1e-6)) * 60.0
     t_rapid = (rxy / rapid_xy + rz / rapid_z) * 60.0
@@ -153,11 +223,12 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
         "bbox_mm": bbox_mm,
         "segments": segs2d,
         "segments3d_mm": segs3d_mm,
-        "meta": {"counts": {"G0": 0, "G1": 0}},
+        "meta": {"counts": {"G0": g0_count, "G1": g1_count}, "lints": lints},
         "est_time_s": t_cut + t_rapid,
     }
 
 
+# ---- jobs ----
 class JobList(LoginRequiredMixin, OwnerQS, ListView):
     model = Job
     ordering = ["-created_at"]
@@ -168,11 +239,11 @@ class JobDetail(LoginRequiredMixin, OwnerReq, DetailView):
 
 class JobCreate(LoginRequiredMixin, CreateView):
     model = Job
-    fields = ["machine","material","stock_lwh_mm","qty","wcs"]
+    fields = ["machine", "material", "stock_lwh_mm", "qty", "wcs"]
     template_name = "main_app/job_form.html"
 
     def get_initial(self):
-        return {"stock_lwh_mm":{"L":100,"W":60,"H":12}, "qty":1, "wcs":"G54"}
+        return {"stock_lwh_mm": {"L": 100, "W": 60, "H": 12}, "qty": 1, "wcs": "G54"}
 
     def form_valid(self, form):
         form.instance.owner = self.request.user
@@ -187,12 +258,14 @@ class JobCreate(LoginRequiredMixin, CreateView):
 
 class JobUpdate(LoginRequiredMixin, OwnerReq, UpdateView):
     model = Job
-    fields = ["machine","material","stock_lwh_mm","qty","wcs","status"]
+    fields = ["machine", "material", "stock_lwh_mm", "qty", "wcs", "status"]
     template_name = "main_app/job_form.html"
+
     def form_valid(self, form):
         resp = super().form_valid(form)
         RunLog.objects.create(job=self.object, user=self.request.user, action="update", notes="")
         return resp
+
     def get_success_url(self):
         return reverse("job_detail", args=[self.object.pk])
 
@@ -222,7 +295,7 @@ def job_packet(request, pk):
     return render(request, "main_app/job_packet.html", {"job": job})
 
 
-# --- Program Update / Delete ---
+# --- Program Update / Delete / Download ---
 class ProgramEditForm(forms.ModelForm):
     # allow optional re-upload (keeps file if left empty)
     file = forms.FileField(required=False, help_text="Upload to replace the current file.")
@@ -236,18 +309,42 @@ class ProgramUpdate(LoginRequiredMixin, OwnerReq, UpdateView):
     template_name = "main_app/program_edit.html"
 
     def form_valid(self, form):
-        resp = super().form_valid(form)
-        # If file replaced, re-parse
-        if form.cleaned_data.get("file"):
-            with open(self.object.file.path, "r", encoding="utf-8", errors="ignore") as fh:
-                parsed = tiny_parse_gcode(fh)
+        uploaded = form.cleaned_data.get("file")
+
+        # If there is a new file, validate first (before saving)
+        if uploaded:
+            _, ext = os.path.splitext(uploaded.name.lower())
+            if ext not in ALLOWED_EXT:
+                form.add_error("file", "Unsupported file type. Use .nc, .gcode, or .tap.")
+                return self.form_invalid(form)
+            if uploaded.size > MAX_BYTES:
+                form.add_error("file", "File too large (>5MB).")
+                return self.form_invalid(form)
+
+            # Save text fields and file
+            self.object = form.save(commit=False)
+            self.object.file = uploaded
+            self.object.save()
+
+            # Re-parse after replacing file
+            try:
+                with open(self.object.file.path, "r", encoding="utf-8", errors="ignore") as fh:
+                    parsed = tiny_parse_gcode(fh)
+            except Exception as e:
+                form.add_error("file", f"Failed to parse G-code: {e}")
+                return self.form_invalid(form)
+
             self.object.units = parsed["units"]
             self.object.abs_mode = parsed["abs"]
             self.object.bbox_json = parsed["bbox"]
             self.object.meta_json = parsed["meta"]
             self.object.est_time_s = parsed["est_time_s"]
-            self.object.save(update_fields=["units","abs_mode","bbox_json","meta_json","est_time_s"])
-        return resp
+            self.object.save(update_fields=["units", "abs_mode", "bbox_json", "meta_json", "est_time_s"])
+
+            return redirect(reverse("program_detail", args=[self.object.pk]))
+
+        # No new file — just save metadata edits
+        return super().form_valid(form)
 
     def get_success_url(self):
         return reverse("program_detail", args=[self.object.pk])
@@ -265,3 +362,50 @@ def program_download(request, pk):
         return FileResponse(open(p.file.path, "rb"), as_attachment=True, filename=fname)
     except FileNotFoundError:
         raise Http404("Program file missing.")
+    
+
+
+
+@login_required
+def program_history(request, pk):
+    prog = get_object_or_404(Program, pk=pk)
+    if prog.owner_id != request.user.id:
+        raise PermissionDenied
+    versions = prog.versions.all()
+    return render(request, "main_app/program_history.html", {"program": prog, "versions": versions})
+
+@require_GET
+@login_required
+def program_version_download(request, pk, ver_id):
+    prog = get_object_or_404(Program, pk=pk)
+    if prog.owner_id != request.user.id:
+        raise PermissionDenied
+    ver = get_object_or_404(ProgramVersion, pk=ver_id, program=prog)
+    try:
+        fname = f"{slugify(prog.part_no)}-{slugify(prog.revision or 'rev')}-v{ver.id}.nc"
+        return FileResponse(open(ver.file.path, "rb"), as_attachment=True, filename=fname)
+    except FileNotFoundError:
+        raise Http404("Version file missing.")
+
+@login_required
+def program_diff(request, pk, ver_id):
+    prog = get_object_or_404(Program, pk=pk)
+    if prog.owner_id != request.user.id:
+        raise PermissionDenied
+    ver = get_object_or_404(ProgramVersion, pk=ver_id, program=prog)
+
+    def read_lines(path):
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            return fh.read().splitlines()
+
+    old_lines = read_lines(ver.file.path)
+    cur_lines = read_lines(prog.file.path)
+
+    diff_html = difflib.HtmlDiff(wrapcolumn=100).make_table(
+        old_lines, cur_lines, fromdesc=f"Version v{ver.id}", todesc="Current"
+    )
+    return render(
+        request,
+        "main_app/program_diff.html",
+        {"program": prog, "version": ver, "diff_html": mark_safe(diff_html)},
+    )

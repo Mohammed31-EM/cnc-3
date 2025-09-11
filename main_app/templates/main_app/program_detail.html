@@ -1,5 +1,13 @@
 {% extends "base.html" %}{% block content %}
 <h2>{{ object.part_no }} {{ object.revision }}</h2>
+{% if request.user.id == object.owner_id %}
+<div style="margin:.5rem 0;display:flex;gap:.5rem;flex-wrap:wrap">
+  <a class="btn" href="{% url 'program_edit' object.pk %}">Edit</a>
+  <a class="btn" href="{% url 'program_delete' object.pk %}" style="background:#ef4444">Delete</a>
+  <a class="btn" href="{% url 'program_download' object.pk %}">Download .nc</a>
+  <a class="btn" href="{% url 'program_history' object.pk %}">History</a>
+</div>
+{% endif %}
 <p>Units: {{ object.units }} • Mode: {{ object.abs_mode|yesno:"ABS,INC" }}</p>
 <p>BBox: {{ object.bbox_json }} • Est: {{ object.est_time_s|floatformat:1 }} s</p>
 

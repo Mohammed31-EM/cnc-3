@@ -1,6 +1,7 @@
 # main_app/models.py
 from django.db import models
 from django.contrib.auth import get_user_model
+from django.conf import settings
 User = get_user_model()
 
 class Program(models.Model):
@@ -54,3 +55,16 @@ class RunLog(models.Model):
     notes  = models.TextField(blank=True)
     ts = models.DateTimeField(auto_now_add=True)
     def __str__(self): return f"{self.ts:%Y-%m-%d %H:%M} {self.action}"
+
+
+class ProgramVersion(models.Model):
+    program = models.ForeignKey("Program", on_delete=models.CASCADE, related_name="versions")
+    file = models.FileField(upload_to="program_versions/")
+    comment = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def _str_(self):
+        return f"v{self.pk} of {self.program.part_no} {self.program.revision}"

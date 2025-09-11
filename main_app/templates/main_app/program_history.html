@@ -1,0 +1,25 @@
+{% extends "base.html" %}{% block content %}
+<h2>History — {{ program.part_no }} {{ program.revision }}</h2>
+
+{% if versions %}
+  <table style="width:100%;border-collapse:collapse">
+    <thead><tr style="text-align:left;border-bottom:1px solid #1f2937">
+      <th>When</th><th>Comment</th><th>Actions</th>
+    </tr></thead>
+    <tbody>
+    {% for v in versions %}
+      <tr style="border-bottom:1px solid #111a2c">
+        <td>{{ v.created_at|date:"Y-m-d H:i" }}</td>
+        <td>{{ v.comment|default:"Auto snapshot" }}</td>
+        <td style="display:flex;gap:.5rem">
+          <a class="btn" href="{% url 'program_version_download' program.pk v.pk %}">Download</a>
+          <a class="btn" href="{% url 'program_diff' program.pk v.pk %}">Compare → Current</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>No prior versions yet.</p>
+{% endif %}
+{% endblock %}

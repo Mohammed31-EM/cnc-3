@@ -21,4 +21,10 @@ urlpatterns = [
 
     # data for plot
     path("programs/<int:pk>/preview.json", views.program_preview_json, name="program_preview_json"),
+
+    # Program history & diff
+    path("programs/<int:pk>/history/", views.program_history, name="program_history"),
+    path("programs/<int:pk>/versions/<int:ver_id>/diff/", views.program_diff, name="program_diff"),
+    path("programs/<int:pk>/versions/<int:ver_id>/download/", views.program_version_download, name="program_version_download"),
+
 ]

@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block content %}
+<h2>Diff — {{ program.part_no }} {{ program.revision }}</h2>
+<p>Comparing <strong>Version v{{ version.id }}</strong> → <strong>Current</strong></p>
+<div style="overflow:auto; max-width:100%; border:1px solid #1f2937; background:#0b1220">
+  {{ diff_html }}
+</div>
+<style>
+/* Tidy up difflib’s default inline styles */
+table.diff { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.diff_header { background:#111a2c; color:#e5e7eb; }
+td.diff_next { display:none; } /* hide arrow column */
+td, th { border-color:#1f2937 !important; }
+</style>
+{% endblock %}

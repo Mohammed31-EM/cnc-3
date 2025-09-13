@@ -1,9 +1,5 @@
-# main_app/admin.py
 from django.contrib import admin
-from .models import (
-    Program, ProgramVersion,   # <-- add ProgramVersion
-    Machine, Material, Job, RunLog
-)
+from .models import Program, ProgramVersion, Machine, Material, Job, RunLog
 
 @admin.register(Program)
 class ProgramAdmin(admin.ModelAdmin):
@@ -42,9 +38,10 @@ class JobAdmin(admin.ModelAdmin):
 
 @admin.register(RunLog)
 class RunLogAdmin(admin.ModelAdmin):
-    list_display = ("id", "job", "user", "action", "created_at")  # <-- was ts
+    # Use the actual timestamp field on your model: 'ts'
+    list_display = ("id", "job", "user", "action", "ts")
     list_filter = ("action", "user")
-    search_fields = ("job_id", "user_username", "action", "notes")
-    date_hierarchy = "created_at"
+    search_fields = ("job_id", "jobprogrampart_no", "user_username", "action", "notes")
+    date_hierarchy = "ts"
     autocomplete_fields = ("job", "user")
     list_select_related = ("job", "user")

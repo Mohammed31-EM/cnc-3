@@ -18,6 +18,7 @@ urlpatterns = [
     path("jobs/<int:pk>/submit/", views.job_submit, name="job_submit"),
     path("jobs/<int:pk>/approve/", views.job_approve, name="job_approve"),
     path("jobs/<int:pk>/packet/", views.job_packet, name="job_packet"),
+    path("jobs/<int:pk>/lint.json", views.job_lint_json, name="job_lint_json"),
 
     # data for plot
     path("programs/<int:pk>/preview.json", views.program_preview_json, name="program_preview_json"),

@@ -68,3 +68,13 @@ class ProgramVersion(models.Model):
 
     def _str_(self):
         return f"v{self.pk} of {self.program.part_no} {self.program.revision}"
+    
+
+class Attachment(models.Model):
+    job   = models.ForeignKey("Job", on_delete=models.CASCADE)
+    file  = models.FileField(upload_to="attachments/")
+    uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.job} — {self.file.name}"

@@ -1,24 +1,23 @@
 # main_app/views.py
 import os
 import math
+import difflib
 
 from django import forms
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from django.http import JsonResponse, FileResponse, Http404
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse, reverse_lazy
+from django.utils.html import mark_safe
 from django.utils.text import slugify
+from django.views.decorators.http import require_GET
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 
-from .models import Program, Job, Machine, Material, RunLog
-import difflib
-from django.views.decorators.http import require_GET
-from django.utils.html import mark_safe
-from django.core.exceptions import PermissionDenied
+from .models import Program, Job, Machine, Material, RunLog, ProgramVersion
 
-from .models import ProgramVersion
 
 # --- Upload constraints ---
 ALLOWED_EXT = {".nc", ".gcode", ".tap"}
@@ -45,7 +44,6 @@ class ProgramList(LoginRequiredMixin, OwnerQS, ListView):
         qs = super().get_queryset()
         q = self.request.GET.get("q")
         if q:
-            # FIX: use __icontains (double underscore); and use Q for OR
             qs = qs.filter(Q(part_no_icontains=q) | Q(revision_icontains=q))
         return qs
 
@@ -111,8 +109,25 @@ def program_preview_json(request, pk):
     })
 
 
-# ---- tiny MVP parser: G20/21, G90/91, G0/G1 ----
-def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
+# ---- tiny MVP parser with Lint Pack v2 ----
+def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0, safe_z_mm=None):
+    """
+    Parses a minimal G-code subset and emits:
+      - 2D XY segments (original units) for canvas
+      - 3D segments in mm for Three.js
+      - bbox (original units) + bbox_mm
+      - meta.lints: list of {code, sev, msg}
+      - meta.counts: G0/G1 counts
+
+    Lints (v2):
+      - L-UNITS: no G20/G21
+      - L-MODE:  no G90/G91
+      - NO_WCS:  no G54..G59
+      - SPINDLE_BEFORE_CUT: cutting before M3/M4 (ever)
+      - FEED_BEFORE_CUT: first G1 before any F is set
+      - RAPID_BELOW_SAFEZ: any G0 Z below safe_z_mm (if provided)
+      - UNKNOWN_G / UNKNOWN_M: unrecognized codes encountered
+    """
     units = "mm"; abs_mode = True
     x = y = z = 0.0
     feed = 1000.0  # mm/min
@@ -120,13 +135,23 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
     bbox    = {"xmin": 0, "xmax": 0, "ymin": 0, "ymax": 0, "zmin": 0, "zmax": 0}
     bbox_mm = {"xmin": 0, "xmax": 0, "ymin": 0, "ymax": 0, "zmin": 0, "zmax": 0}
 
-    segs2d    = []   # XY segments (original units) for 2D canvas
-    segs3d_mm = []   # 3D segments (mm) for Three.js
+    segs2d    = []
+    segs3d_mm = []
 
-    # simple lint flags & counts
+    # lint tracking
     seen_units = False
     seen_mode  = False
-    lints = []
+    seen_wcs   = False  # G54..G59
+    spindle_on = False  # current state
+    ever_spindle_on = False
+    feed_set   = False
+    cut_before_feed = False
+    first_cut_seen = False
+
+    unknown_g = set()
+    unknown_m = set()
+    rapid_min_z_mm = float("inf")
+
     g0_count = 0
     g1_count = 0
 
@@ -143,6 +168,9 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
 
     bb(x, y, z); bb_mm(x, y, z, 1.0)
 
+    allowed_g = {0,1,2,3,17,18,19,20,21,28,40,41,42,43,49,54,55,56,57,58,59,80,90,91,92,94,95}
+    allowed_m = {0,1,2,3,4,5,6,7,8,9,30}
+
     cut_len = rxy = rz = 0.0
 
     for raw in fh:
@@ -154,10 +182,36 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
             continue
 
         U = line.upper()
+
+        # modal/unit/mode
         if "G20" in U: units = "in"; seen_units = True
         if "G21" in U: units = "mm"; seen_units = True
         if "G90" in U: abs_mode = True;  seen_mode = True
         if "G91" in U: abs_mode = False; seen_mode = True
+        if any(("G5"+d) in U for d in "456789"):  # G54..G59
+            seen_wcs = True
+        if "M3" in U or "M03" in U or "M4" in U or "M04" in U:
+            spindle_on = True
+            ever_spindle_on = True
+        if "M5" in U or "M05" in U:
+            spindle_on = False
+
+        # unknown code scan
+        for tok in U.replace(";", " ").split():
+            if tok.startswith("G") and len(tok) > 1 and any(ch.isdigit() for ch in tok[1:]):
+                try:
+                    gnum = int(''.join(ch for ch in tok[1:] if ch.isdigit()))
+                    if gnum not in allowed_g:
+                        unknown_g.add(gnum)
+                except ValueError:
+                    pass
+            if tok.startswith("M") and len(tok) > 1 and any(ch.isdigit() for ch in tok[1:]):
+                try:
+                    mnum = int(''.join(ch for ch in tok[1:] if ch.isdigit()))
+                    if mnum not in allowed_m:
+                        unknown_m.add(mnum)
+                except ValueError:
+                    pass
 
         nx, ny, nz = x, y, z
         code = None
@@ -174,14 +228,19 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
                 v = float(t[1:]); nz = (z + v) if not abs_mode else v
             elif t.startswith("F"):
                 try:
-                    feed = float(t[1:])
+                    feed = float(t[1:]); feed_set = True
                 except ValueError:
                     pass
 
         if code is None or (nx, ny, nz) == (x, y, z):
             continue
 
-        # counts
+        if code == "G1":
+            if not feed_set:
+                cut_before_feed = True
+            if not first_cut_seen:
+                first_cut_seen = True
+
         if code == "G0": g0_count += 1
         if code == "G1": g1_count += 1
 
@@ -190,28 +249,42 @@ def tiny_parse_gcode(fh, rapid_xy=3000.0, rapid_z=1500.0):
 
         # 3D (mm)
         conv = 25.4 if units == "in" else 1.0
-        segs3d_mm.append({
-            "k": code,
-            "frm": [x*conv,  y*conv,  z*conv],
-            "to":  [nx*conv, ny*conv, nz*conv]
-        })
+        X1,Y1,Z1 = x*conv,  y*conv,  z*conv
+        X2,Y2,Z2 = nx*conv, ny*conv, nz*conv
+        segs3d_mm.append({"k": code, "frm": [X1,Y1,Z1], "to": [X2,Y2,Z2]})
 
-        # timing distances (mm)
-        dx, dy, dz = (nx-x)*conv, (ny-y)*conv, (nz-z)*conv
+        if code == "G0":
+            rapid_min_z_mm = min(rapid_min_z_mm, Z1, Z2)
+
+        # timing (mm)
+        dx, dy, dz = X2-X1, Y2-Y1, Z2-Z1
         if code == "G1":
             cut_len += (dx*dx + dy*dy + dz*dz) ** 0.5
         else:
-            if nz != z: rz += abs(dz)
-            if nx != x or ny != y: rxy += (dx*dx + dy*dy) ** 0.5
+            if Z2 != Z1: rz += abs(dz)
+            if X2 != X1 or Y2 != Y1: rxy += (dx*dx + dy*dy) ** 0.5
 
         x, y, z = nx, ny, nz
         bb(x, y, z); bb_mm(x, y, z, conv)
 
-    # simple lints
+    # lints
+    lints = []
     if not seen_units:
-        lints.append({"code": "L-UNITS", "msg": "No G20/G21 — units unspecified"})
+        lints.append({"code":"L-UNITS","sev":"warn","msg":"No G20/G21 — units unspecified"})
     if not seen_mode:
-        lints.append({"code": "L-MODE", "msg": "No G90/G91 — distance mode unspecified"})
+        lints.append({"code":"L-MODE","sev":"warn","msg":"No G90/G91 — distance mode unspecified"})
+    if not seen_wcs:
+        lints.append({"code":"NO_WCS","sev":"warn","msg":"No work offset (G54..G59) seen"})
+    if first_cut_seen and not ever_spindle_on:
+        lints.append({"code":"SPINDLE_BEFORE_CUT","sev":"error","msg":"Cutting move (G1) appears before spindle on (M3/M4)"})
+    if cut_before_feed:
+        lints.append({"code":"FEED_BEFORE_CUT","sev":"warn","msg":"First cutting move (G1) before any feed (F) specified"})
+    if safe_z_mm is not None and rapid_min_z_mm != float("inf") and rapid_min_z_mm < safe_z_mm - 1e-6:
+        lints.append({"code":"RAPID_BELOW_SAFEZ","sev":"error","msg":f"Rapid Z below safe Z ({rapid_min_z_mm:.3f} < {safe_z_mm:.3f} mm)"})
+    if unknown_g:
+        lints.append({"code":"UNKNOWN_G","sev":"info","msg":f"Unknown/unsupported G-codes: {sorted(unknown_g)}"})
+    if unknown_m:
+        lints.append({"code":"UNKNOWN_M","sev":"info","msg":f"Unknown/unsupported M-codes: {sorted(unknown_m)}"})
 
     t_cut   = (cut_len / max(feed, 1e-6)) * 60.0
     t_rapid = (rxy / rapid_xy + rz / rapid_z) * 60.0
@@ -233,9 +306,57 @@ class JobList(LoginRequiredMixin, OwnerQS, ListView):
     model = Job
     ordering = ["-created_at"]
 
+
 class JobDetail(LoginRequiredMixin, OwnerReq, DetailView):
     model = Job
     template_name = "main_app/job_detail.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+
+        # --- include RunLog timeline
+        ctx["logs"] = (
+            RunLog.objects.filter(job=self.object)
+            .select_related("user")
+            .order_by("-ts")
+        )
+
+        # --- include lint results inline
+        try:
+            with open(self.object.program.file.path, "r", encoding="utf-8", errors="ignore") as fh:
+                parsed = tiny_parse_gcode(fh, safe_z_mm=self.object.machine.safe_z)
+            lints = list(parsed["meta"].get("lints", []))
+
+            # stock bounds check
+            bb = parsed["bbox_mm"]
+            L = float(self.object.stock_lwh_mm.get("L", 0) or 0)
+            W = float(self.object.stock_lwh_mm.get("W", 0) or 0)
+            H = float(self.object.stock_lwh_mm.get("H", 0) or 0)
+
+            if bb["xmin"] < -1e-6 or bb["xmax"] > L + 1e-6 or \
+               bb["ymin"] < -1e-6 or bb["ymax"] > W + 1e-6:
+                lints.append({
+                    "code": "EXIT_STOCK_XY", "sev": "warn",
+                    "msg": f"Toolpath leaves XY stock bounds (X:[0,{L}] Y:[0,{W}])"
+                })
+
+            if bb["zmin"] < -H - 1e-6:
+                lints.append({
+                    "code": "EXIT_STOCK_Z", "sev": "warn",
+                    "msg": f"Toolpath goes below stock thickness (Zmin {bb['zmin']:.3f} < -{H} mm)"
+                })
+
+            ctx["lint_results"] = {
+                "bbox_mm": bb,
+                "counts": parsed["meta"].get("counts", {}),
+                "lints": lints,
+            }
+        except Exception as e:
+            ctx["lint_results"] = {"error": str(e)}
+
+        return ctx
+
+
 
 class JobCreate(LoginRequiredMixin, CreateView):
     model = Job
@@ -256,6 +377,7 @@ class JobCreate(LoginRequiredMixin, CreateView):
     def get_success_url(self):
         return reverse("job_detail", args=[self.object.pk])
 
+
 class JobUpdate(LoginRequiredMixin, OwnerReq, UpdateView):
     model = Job
     fields = ["machine", "material", "stock_lwh_mm", "qty", "wcs", "status"]
@@ -269,9 +391,11 @@ class JobUpdate(LoginRequiredMixin, OwnerReq, UpdateView):
     def get_success_url(self):
         return reverse("job_detail", args=[self.object.pk])
 
+
 class JobDelete(LoginRequiredMixin, OwnerReq, DeleteView):
     model = Job
     success_url = reverse_lazy("job_list")
+
 
 @login_required
 def job_submit(request, pk):
@@ -281,6 +405,7 @@ def job_submit(request, pk):
         RunLog.objects.create(job=job, user=request.user, action="submit", notes="")
     return redirect("job_detail", pk=pk)
 
+
 @login_required
 def job_approve(request, pk):
     job = get_object_or_404(Job, pk=pk, owner=request.user)
@@ -289,10 +414,48 @@ def job_approve(request, pk):
         RunLog.objects.create(job=job, user=request.user, action="approve", notes="")
     return redirect("job_detail", pk=pk)
 
+
 @login_required
 def job_packet(request, pk):
     job = get_object_or_404(Job, pk=pk, owner=request.user)
     return render(request, "main_app/job_packet.html", {"job": job})
+
+
+# --- Job-aware lint JSON (machine safe Z + stock bounds) ---
+@login_required
+def job_lint_json(request, pk):
+    job = get_object_or_404(Job, pk=pk, owner=request.user)
+
+    # Parse program with machine safe Z for rapid checks
+    with open(job.program.file.path, "r", encoding="utf-8", errors="ignore") as fh:
+        parsed = tiny_parse_gcode(fh, safe_z_mm=job.machine.safe_z)
+
+    lints = list(parsed["meta"].get("lints", []))  # copy
+
+    # Stock bounds (assume origin at top-left corner of top face):
+    # X:[0, L], Y:[0, W], Z:0 at top, cutting downward negative to -H
+    bb = parsed["bbox_mm"]
+    L = float(job.stock_lwh_mm.get("L", 0) or 0)
+    W = float(job.stock_lwh_mm.get("W", 0) or 0)
+    H = float(job.stock_lwh_mm.get("H", 0) or 0)
+
+    if bb["xmin"] < -1e-6 or bb["xmax"] > L + 1e-6 or bb["ymin"] < -1e-6 or bb["ymax"] > W + 1e-6:
+        lints.append({"code":"EXIT_STOCK_XY","sev":"warn",
+                      "msg":f"Toolpath leaves XY stock bounds (X:[0,{L}] Y:[0,{W}])"})
+
+    if bb["zmin"] < -H - 1e-6:
+        lints.append({"code":"EXIT_STOCK_Z","sev":"warn",
+                      "msg":f"Toolpath goes below stock thickness (Zmin {bb['zmin']:.3f} < -{H} mm)"})
+
+    return JsonResponse({
+        "job_id": job.pk,
+        "program_id": job.program_id,
+        "machine": job.machine.name,
+        "stock_mm": job.stock_lwh_mm,
+        "bbox_mm": bb,
+        "counts": parsed["meta"].get("counts", {}),
+        "lints": lints,
+    })
 
 
 # --- Program Update / Delete / Download ---
@@ -362,10 +525,9 @@ def program_download(request, pk):
         return FileResponse(open(p.file.path, "rb"), as_attachment=True, filename=fname)
     except FileNotFoundError:
         raise Http404("Program file missing.")
-    
 
 
-
+# --- Program History / Diff / Version download ---
 @login_required
 def program_history(request, pk):
     prog = get_object_or_404(Program, pk=pk)

@@ -6,6 +6,8 @@
   <a class="btn" href="{% url 'program_delete' object.pk %}" style="background:#ef4444">Delete</a>
   <a class="btn" href="{% url 'program_download' object.pk %}">Download .nc</a>
   <a class="btn" href="{% url 'program_history' object.pk %}">History</a>
+  <a class="btn" href="{% url 'program_preview' object.pk %}">3D Simulation</a>
+  
 </div>
 {% endif %}
 <p>Units: {{ object.units }} • Mode: {{ object.abs_mode|yesno:"ABS,INC" }}</p>

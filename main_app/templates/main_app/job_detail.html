@@ -1,17 +1,27 @@
-{% extends "base.html" %}{% block content %}
+{% extends "base.html" %}
+{% block content %}
 <h2>Job #{{ object.id }}</h2>
+
 <p>
-  Program: <a href="{% url 'program_detail' object.program.pk %}">
-    {{ object.program.part_no }} {{ object.program.revision }}</a><br>
-  Machine: {{ object.machine.name }} • Material: {{ object.material.name }}<br>
-  Qty: {{ object.qty }} • WCS: {{ object.wcs }} • Status: <strong>{{ object.get_status_display }}</strong>
+  Program:
+  <a href="{% url 'program_detail' object.program.pk %}">
+    {{ object.program.part_no }} {{ object.program.revision }}
+  </a><br>
+  Machine: {{ object.machine.name }} •
+  Material: {{ object.material.name }}<br>
+  Qty: {{ object.qty }} •
+  WCS: {{ object.wcs }} •
+  Status: <strong>{{ object.get_status_display }}</strong>
 </p>
 
 {% if request.user.id == object.owner_id %}
 <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.5rem 0">
   <a class="btn" href="{% url 'job_edit' object.pk %}">Edit</a>
-  <form method="post" action="{% url 'job_delete' object.pk %}" style="display:inline">{% csrf_token %}
-    <button class="btn" style="background:#ef4444" onclick="return confirm('Delete this job?')">Delete</button>
+  <form method="post" action="{% url 'job_delete' object.pk %}" style="display:inline">
+    {% csrf_token %}
+    <button class="btn" style="background:#ef4444" onclick="return confirm('Delete this job?')">
+      Delete
+    </button>
   </form>
   {% if object.status == "draft" %}
     <a class="btn" href="{% url 'job_submit' object.pk %}">Submit</a>
@@ -19,15 +29,68 @@
     <a class="btn" href="{% url 'job_approve' object.pk %}">Approve</a>
   {% endif %}
   <a class="btn" href="{% url 'job_packet' object.pk %}">View Packet</a>
+  <a class="btn" href="{% url 'job_packet_pdf' object.pk %}">Download PDF</a>
 </div>
 {% endif %}
 
 <h3>Run Log</h3>
-{% if object.runlog_set.all %}
+{% if logs %}
   <ul>
-    {% for r in object.runlog_set.all|dictsortreversed:"created_at" %}
-      <li>{{ r.created_at|date:"Y-m-d H:i" }} — {{ r.user.username }} — {{ r.action }} {% if r.notes %}— {{ r.notes }}{% endif %}</li>
+    {% for r in logs %}
+      <li>
+        {{ r.ts|date:"Y-m-d H:i" }} —
+        {{ r.user.username }} —
+        {{ r.action }}
+        {% if r.notes %} — {{ r.notes }}{% endif %}
+      </li>
     {% endfor %}
   </ul>
-{% else %}<p>No activity yet.</p>{% endif %}
+{% else %}
+  <p>No activity yet.</p>
+{% endif %}
+
+{% if lint_results %}
+  <h3>Lint Warnings</h3>
+  <ul>
+    {% if lint_results.error %}
+      <li style="color:red;">Error parsing program: {{ lint_results.error }}</li>
+    {% else %}
+      {% for lint in lint_results.lints %}
+        <li>
+          <strong>[{{ lint.sev|upper }}]</strong>
+          {{ lint.code }} — {{ lint.msg }}
+        </li>
+      {% empty %}
+        <li>No lint issues found ✅</li>
+      {% endfor %}
+    {% endif %}
+  </ul>
+{% endif %}
+
+<h3>Attachments</h3>
+{% if attachments %}
+  <ul>
+    {% for att in attachments %}
+      <li>
+        <a href="{% url 'attachment_download' att.pk %}">{{ att.file.name|basename }}</a>
+        (uploaded by {{ att.uploaded_by.username }} on {{ att.uploaded_at|date:"Y-m-d H:i" }})
+        {% if request.user.id == object.owner_id %}
+          — <a href="{% url 'attachment_delete' att.pk %}" style="color:red"
+               onclick="return confirm('Delete this attachment?')">Delete</a>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>No attachments yet.</p>
+{% endif %}
+
+{% if request.user.id == object.owner_id %}
+  <h4>Upload Attachment</h4>
+  <form method="post" enctype="multipart/form-data" action="{% url 'attachment_add' object.pk %}">
+    {% csrf_token %}
+    {{ attachment_form.file }}
+    <button type="submit" class="btn">Upload</button>
+  </form>
+{% endif %}
 {% endblock %}

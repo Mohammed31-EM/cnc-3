@@ -1,36 +1,87 @@
-<!doctype html><html><head>
-<meta charset="utf-8"><title>Setup Sheet — Job #{{ job.id }}</title>
-<style>
-  body{font:14px/1.4 system-ui; padding:24px}
-  h1{margin:0 0 8px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .box{border:1px solid #ccc;padding:12px;border-radius:8px}
-  @media print { .no-print{display:none} body{color:#000} }
-</style>
-</head><body>
-<div class="no-print"><button onclick="print()">Print</button></div>
-<h1>Setup Sheet — Job #{{ job.id }}</h1>
-<div class="grid">
-  <div class="box">
-    <h3>Program</h3>
-    <p>{{ job.program.part_no }} {{ job.program.revision }}</p>
-    <p>BBox: {{ job.program.bbox_json }}</p>
-    <p>Estimated time: {{ job.program.est_time_s|floatformat:1 }} s</p>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Setup Sheet — Job #{{ job.id }}</title>
+  <style>
+    body { font:14px/1.4 system-ui; padding:24px; }
+    h1 { margin:0 0 8px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .box { border:1px solid #ccc; padding:12px; border-radius:8px; }
+    table { width:100%; border-collapse:collapse; margin-top:8px; }
+    th, td { border:1px solid #ccc; padding:6px 8px; text-align:left; font-size:13px; }
+    th { background:#f9f9f9; }
+    ul { margin:0; padding-left:16px; }
+    @media print { .no-print{display:none} body{color:#000} }
+  </style>
+</head>
+<body>
+  <div class="no-print" style="margin-bottom:10px;">
+    <button onclick="print()">🖨 Print</button>
+    <a class="btn" href="{% url 'job_packet_pdf' job.pk %}">⬇ Download PDF</a>
   </div>
-  <div class="box">
-    <h3>Machine & Material</h3>
-    <p>Machine: {{ job.machine.name }}</p>
-    <p>Material: {{ job.material.name }}</p>
-    <p>WCS: {{ job.wcs }}</p>
+
+  <h1>Setup Sheet — Job #{{ job.id }}</h1>
+
+  <div class="grid">
+    <div class="box">
+      <h3>Program</h3>
+      <p><strong>{{ job.program.part_no }}</strong> {{ job.program.revision }}</p>
+      <p>Bounding Box: {{ job.program.bbox_json }}</p>
+      <p>Estimated time: {{ job.program.est_time_s|floatformat:1 }} s</p>
+    </div>
+
+    <div class="box">
+      <h3>Machine & Material</h3>
+      <p>Machine: {{ job.machine.name }}</p>
+      <p>Material: {{ job.material.name }}</p>
+      <p>WCS: {{ job.wcs }}</p>
+    </div>
+
+    <div class="box">
+      <h3>Stock</h3>
+      <p>{{ job.stock_lwh_mm }}</p>
+      <p>Quantity: {{ job.qty }}</p>
+    </div>
+
+    <div class="box">
+      <h3>Safety Notes</h3>
+      <ul>
+        <li>Verify Safe Z clearance.</li>
+        <li>Ensure clamps clear toolpath.</li>
+        <li>Coolant and spindle off at end.</li>
+      </ul>
+    </div>
   </div>
-  <div class="box">
-    <h3>Stock</h3>
-    <p>{{ job.stock_lwh_mm }}</p>
-    <p>Quantity: {{ job.qty }}</p>
+
+  {% if logs %}
+  <div class="box" style="margin-top:20px;">
+    <h3>Run Log</h3>
+    <table>
+      <tr><th>Time</th><th>User</th><th>Action</th><th>Notes</th></tr>
+      {% for log in logs %}
+      <tr>
+        <td>{{ log.ts|date:"Y-m-d H:i" }}</td>
+        <td>{{ log.user.username }}</td>
+        <td>{{ log.action }}</td>
+        <td>{{ log.notes }}</td>
+      </tr>
+      {% endfor %}
+    </table>
   </div>
-  <div class="box">
-    <h3>Safety & Lints</h3>
-    <p>Verify safe Z, clamps clear, coolant/spindle off at end.</p>
+  {% endif %}
+
+  {% if lint_results %}
+  <div class="box" style="margin-top:20px;">
+    <h3>Lint Warnings</h3>
+    <ul>
+      {% for lint in lint_results.lints %}
+        <li><strong>[{{ lint.sev|upper }}]</strong> {{ lint.code }} — {{ lint.msg }}</li>
+      {% empty %}
+        <li>No lint issues found ✅</li>
+      {% endfor %}
+    </ul>
   </div>
-</div>
-</body></html>
+  {% endif %}
+</body>
+</html>

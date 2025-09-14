@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Program Preview — {{ program.part_no }} {{ program.revision }}</h2>
+
+<div id="viewer" style="width:100%; height:600px; background:#111; border-radius:8px;"></div>
+
+<div style="margin:12px 0; display:grid; gap:12px; grid-template-columns:1fr;">
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+    <button id="play">▶ Play</button>
+    <button id="pause">⏸ Pause</button>
+    <button id="step">⏭ Step</button>
+    <button id="reset">⏮ Reset</button>
+    <button id="fit">🎯 Fit View</button>
+
+    <label style="margin-left:16px;">Show Grid
+      <input id="gridToggle" type="checkbox" checked>
+    </label>
+    <label>Show BBox
+      <input id="bboxToggle" type="checkbox" checked>
+    </label>
+    <label>Show Rapids (G0)
+      <input id="rapidsToggle" type="checkbox" checked>
+    </label>
+
+    <label style="margin-left:16px;">Camera:
+      <select id="camPreset">
+        <option value="iso">Iso</option>
+        <option value="top">Top</option>
+        <option value="front">Front</option>
+        <option value="right">Right</option>
+      </select>
+    </label>
+  </div>
+
+  <div style="display:grid; gap:6px; grid-template-columns:260px 1fr; align-items:center;">
+    <label>Feed speed (G1): <span id="feedLabel">50</span> mm/s</label>
+    <input id="feedSpeed" type="range" min="5" max="200" step="5" value="50">
+
+    <label>Rapid speed (G0): <span id="rapidLabel">150</span> mm/s</label>
+    <input id="rapidSpeed" type="range" min="20" max="600" step="10" value="150">
+  </div>
+
+  <div style="display:grid; gap:6px; grid-template-columns:260px 1fr; align-items:center;">
+    <label>Tool Ø (mm): <span id="toolDiaLbl">4</span></label>
+    <input id="toolDia" type="range" min="1" max="20" step="1" value="4">
+  </div>
+
+  <div style="display:grid; gap:6px; grid-template-columns:140px 1fr 80px; align-items:center;">
+    <label>Scrub:</label>
+    <input id="scrub" type="range" min="0" max="100" step="0.1" value="0">
+    <span id="scrubPct" style="text-align:right; color:#aaa;">0%</span>
+  </div>
+
+  <div style="background:#222; border-radius:6px; overflow:hidden; height:14px;">
+    <div id="progressFill" style="height:100%; width:0%; background:#4ade80;"></div>
+  </div>
+
+  <div style="display:flex; justify-content:space-between; font-size:12px; color:#999;">
+    <span id="elapsed">0.0 s</span>
+    <span id="remaining">0.0 s remaining</span>
+  </div>
+
+  <div id="stats" style="font-size:12px; color:#aaa;"></div>
+</div>
+
+<!-- Import map so 'three' resolves -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.156.0/build/three.module.js",
+    "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.156.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.156.0/build/three.module.js";
+import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.156.0/examples/jsm/controls/OrbitControls.js";
+
+const PROG_ID = {{ program.id }};
+
+const viewer = document.getElementById("viewer");
+const playBtn = document.getElementById("play");
+const pauseBtn = document.getElementById("pause");
+const stepBtn = document.getElementById("step");
+const resetBtn = document.getElementById("reset");
+const fitBtn = document.getElementById("fit");
+const gridToggle = document.getElementById("gridToggle");
+const bboxToggle = document.getElementById("bboxToggle");
+const rapidsToggle = document.getElementById("rapidsToggle");
+const feedSlider = document.getElementById("feedSpeed");
+const rapidSlider = document.getElementById("rapidSpeed");
+const toolDia = document.getElementById("toolDia");
+const toolDiaLbl = document.getElementById("toolDiaLbl");
+const scrub = document.getElementById("scrub");
+const scrubPct = document.getElementById("scrubPct");
+const feedLabel = document.getElementById("feedLabel");
+const rapidLabel = document.getElementById("rapidLabel");
+const progressFill = document.getElementById("progressFill");
+const elapsedEl = document.getElementById("elapsed");
+const remainingEl = document.getElementById("remaining");
+const statsEl = document.getElementById("stats");
+const camPreset = document.getElementById("camPreset");
+
+let scene, camera, renderer, controls, tool, grid, bboxLine;
+let segments = [];   // [{k, p1, p2, len}]
+let totalLen = 0;    // mm
+let traveled = 0;    // mm
+let playing = false;
+
+let segIdx = 0;      // current segment index
+let segTA = 0;       // mm along current segment
+let lastT = performance.now();
+
+let center = new THREE.Vector3();
+let baseToolRadius = 2; // sphere geometry radius
+
+// restore saved speeds per-program
+const feedKey  = `sim_feed_${PROG_ID}`;
+const rapidKey = `sim_rapid_${PROG_ID}`;
+const savedFeed  = localStorage.getItem(feedKey);
+const savedRapid = localStorage.getItem(rapidKey);
+if (savedFeed)  feedSlider.value  = savedFeed;
+if (savedRapid) rapidSlider.value = savedRapid;
+
+fetch("{% url 'program_preview_json' program.id %}")
+  .then(r => r.json())
+  .then(data => {
+    init(data);
+    animate();
+  });
+
+function init(data) {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111111);
+
+  const w = viewer.clientWidth || window.innerWidth;
+  const h = viewer.clientHeight || 600;
+
+  camera = new THREE.PerspectiveCamera(60, w/h, 1, 5000);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(w, h);
+  viewer.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+
+  // center of bbox for camera targeting
+  const box = data.bbox_mm;
+  center.set(
+    (box.xmax + box.xmin)/2,
+    (box.ymax + box.ymin)/2,
+    (box.zmax + box.zmin)/2
+  );
+
+  // Camera preset: iso
+  setCameraPreset("iso");
+
+  // Axes + Grid on XY plane (Z up)
+  scene.add(new THREE.AxesHelper(50));
+  grid = new THREE.GridHelper(400, 40, 0x333333, 0x222222);
+  grid.rotation.x = Math.PI/2;
+  scene.add(grid);
+
+  // BBox wireframe
+  const boxGeom = new THREE.BoxGeometry(
+    box.xmax - box.xmin,
+    box.ymax - box.ymin,
+    box.zmax - box.zmin
+  );
+  const edges = new THREE.EdgesGeometry(boxGeom);
+  bboxLine = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x888888 }));
+  bboxLine.position.copy(center);
+  scene.add(bboxLine);
+
+  // Tool
+  const toolGeom = new THREE.SphereGeometry(baseToolRadius, 16, 16);
+  const toolMat = new THREE.MeshBasicMaterial({ color: 0xff5555 });
+  tool = new THREE.Mesh(toolGeom, toolMat);
+  scene.add(tool);
+  // apply initial tool diameter
+  toolDiaLbl.textContent = toolDia.value;
+  setToolDiameter(Number(toolDia.value));
+
+  // Segments & total length + stats
+  segments = [];
+  totalLen = 0;
+  let g0 = 0, g1 = 0;
+  for (let i = 0; i < data.segments3d.length; i++) {
+    const s = data.segments3d[i];
+    const p1 = new THREE.Vector3(s.frm[0], s.frm[1], s.frm[2]);
+    const p2 = new THREE.Vector3(s.to[0],  s.to[1],  s.to[2]);
+    const len = p1.distanceTo(p2);
+    totalLen += len;
+    if (s.k === "G1") g1++; else g0++;
+    segments.push({ k: s.k, p1: p1, p2: p2, len: len });
+  }
+
+  if (segments.length) tool.position.copy(segments[0].p1);
+
+  statsEl.textContent = `Segments: ${segments.length}  •  G1: ${g1}  •  G0: ${g0}  •  Total length: ${totalLen.toFixed(1)} mm`;
+
+  // UI wiring
+  feedLabel.textContent = feedSlider.value;
+  rapidLabel.textContent = rapidSlider.value;
+
+  feedSlider.oninput  = () => { feedLabel.textContent = feedSlider.value; };
+  rapidSlider.oninput = () => { rapidLabel.textContent = rapidSlider.value; };
+
+  // persist speeds per program
+  feedSlider.addEventListener("change",  () => localStorage.setItem(feedKey,  feedSlider.value));
+  rapidSlider.addEventListener("change", () => localStorage.setItem(rapidKey, rapidSlider.value));
+
+  gridToggle.onchange   = () => { grid.visible = gridToggle.checked; };
+  bboxToggle.onchange   = () => { bboxLine.visible = bboxToggle.checked; };
+  rapidsToggle.onchange = () => { seekPercent(Number(scrub.value)); };
+
+  toolDia.oninput = () => {
+    toolDiaLbl.textContent = toolDia.value;
+    setToolDiameter(Number(toolDia.value));
+  };
+
+  playBtn.onclick  = () => { playing = true; };
+  pauseBtn.onclick = () => { playing = false; };
+  resetBtn.onclick = reset;
+  stepBtn.onclick  = stepOnce;
+  fitBtn.onclick   = fitToBBox;
+
+  camPreset.onchange = () => { setCameraPreset(camPreset.value); };
+
+  scrub.oninput = () => { scrubPct.textContent = scrub.value + "%"; };
+  scrub.onchange = () => {
+    playing = false;               // stop while seeking
+    seekPercent(Number(scrub.value));
+  };
+
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") {
+      e.preventDefault();
+      playing = !playing;
+    }
+  });
+
+  window.addEventListener("resize", onResize);
+}
+
+function setToolDiameter(diaMm) {
+  // base geometry radius is 2mm → scale to requested radius
+  const targetR = diaMm / 2;
+  const scale = targetR / baseToolRadius;
+  tool.scale.set(scale, scale, scale);
+}
+
+function setCameraPreset(preset) {
+  const dist = 300;
+  if (preset === "iso") {
+    camera.position.set(center.x + dist, center.y + dist, center.z + dist);
+  } else if (preset === "top") {
+    camera.position.set(center.x, center.y, center.z + dist * 1.5);
+  } else if (preset === "front") {
+    camera.position.set(center.x, center.y - dist * 1.5, center.z);
+  } else if (preset === "right") {
+    camera.position.set(center.x + dist * 1.5, center.y, center.z);
+  }
+  controls.target.copy(center);
+  camera.lookAt(center);
+  controls.update();
+}
+
+function fitToBBox() {
+  const box = new THREE.Box3();
+  if (segments.length) {
+    for (const s of segments) {
+      box.expandByPoint(s.p1);
+      box.expandByPoint(s.p2);
+    }
+  } else {
+    // fallback – frame around current center
+    box.setFromCenterAndSize(center, new THREE.Vector3(100,100,100));
+  }
+  const size = new THREE.Vector3(); box.getSize(size);
+  const centerBox = new THREE.Vector3(); box.getCenter(centerBox);
+
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const fov = camera.fov * (Math.PI / 180);
+  const dist = (maxDim * 0.6) / Math.tan(fov / 2); // 0.6 = padding
+  camera.position.copy(centerBox).add(new THREE.Vector3(dist, dist, dist));
+  controls.target.copy(centerBox);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+function onResize() {
+  const w = viewer.clientWidth || window.innerWidth;
+  const h = viewer.clientHeight || 600;
+  camera.aspect = w/h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+
+function currentSpeed() {
+  if (segIdx >= segments.length) return 0;
+  return (segments[segIdx].k === "G1") ? Number(feedSlider.value) : Number(rapidSlider.value);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - lastT) / 1000); // clamp 50ms
+  lastT = now;
+
+  if (playing) advance(dt);
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+function advance(dt) {
+  if (segIdx >= segments.length) { playing = false; return; }
+
+  let move = currentSpeed() * dt; // mm
+  while (move > 1e-6 && segIdx < segments.length) {
+    const seg = segments[segIdx];
+    const remain = seg.len - segTA;
+
+    if (move < remain) {
+      segTA += move;
+      const dir = new THREE.Vector3().subVectors(seg.p2, seg.p1).normalize();
+      const pos = new THREE.Vector3().copy(seg.p1).addScaledVector(dir, segTA);
+      tool.position.copy(pos);
+      traveled += move;
+      move = 0;
+    } else {
+      move -= remain;
+      traveled += remain;
+      tool.position.copy(seg.p2);
+      drawFinishedSegment(seg);
+      segIdx++;
+      segTA = 0;
+      if (segIdx >= segments.length) { playing = false; break; }
+    }
+  }
+  updateProgress();
+  scrub.value = ((traveled / Math.max(1e-6, totalLen)) * 100).toFixed(1);
+  scrubPct.textContent = scrub.value + "%";
+}
+
+function drawFinishedSegment(seg) {
+  if (!rapidsToggle.checked && seg.k !== "G1") return;
+  const mat = new THREE.LineBasicMaterial({ color: (seg.k === "G1" ? 0x00ff00 : 0x4c6fff) });
+  const geom = new THREE.BufferGeometry().setFromPoints([seg.p1, seg.p2]);
+  const line = new THREE.Line(geom, mat);
+  scene.add(line);
+}
+
+function clearDrawnLines() {
+  const toRemove = [];
+  for (let i = 0; i < scene.children.length; i++) {
+    const obj = scene.children[i];
+    if (obj.type === "Line") {
+      if (obj !== bboxLine) toRemove.push(obj);
+    }
+  }
+  for (let i = 0; i < toRemove.length; i++) scene.remove(toRemove[i]);
+}
+
+function updateProgress() {
+  const pct = totalLen > 0 ? (traveled / totalLen) * 100 : 0;
+  progressFill.style.width = (Math.min(100, pct).toFixed(1)) + "%";
+
+  const feed = Number(feedSlider.value), rapid = Number(rapidSlider.value);
+  let cutLen = 0, rapidLen = 0;
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i].k === "G1") cutLen += segments[i].len;
+    else rapidLen += segments[i].len;
+  }
+  const totalEst = (cutLen / Math.max(1e-6, feed)) + (rapidLen / Math.max(1e-6, rapid));
+  const elapsedEst = totalLen > 0 ? totalEst * (traveled / totalLen) : 0;
+  const remainEst = Math.max(0, totalEst - elapsedEst);
+
+  elapsedEl.textContent = elapsedEst.toFixed(1) + " s";
+  remainingEl.textContent = remainEst.toFixed(1) + " s remaining";
+}
+
+function reset() {
+  playing = false;
+  segIdx = 0; segTA = 0; traveled = 0;
+  clearDrawnLines();
+  if (segments.length) tool.position.copy(segments[0].p1);
+  progressFill.style.width = "0%";
+  elapsedEl.textContent = "0.0 s";
+  remainingEl.textContent = "0.0 s remaining";
+  scrub.value = "0"; scrubPct.textContent = "0%";
+}
+
+function stepOnce() {
+  if (segIdx >= segments.length) return;
+  const seg = segments[segIdx];
+  tool.position.copy(seg.p2);
+  traveled += (seg.len - segTA);
+  segIdx++;
+  segTA = 0;
+  drawFinishedSegment(seg);
+  updateProgress();
+  scrub.value = ((traveled / Math.max(1e-6, totalLen)) * 100).toFixed(1);
+  scrubPct.textContent = scrub.value + "%";
+}
+
+function seekPercent(pct) {
+  const target = (pct / 100) * totalLen;
+
+  clearDrawnLines();
+  playing = false;
+  segIdx = 0; segTA = 0; traveled = 0;
+
+  let accum = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (accum + seg.len < target - 1e-6) {
+      drawFinishedSegment(seg);
+      accum += seg.len;
+      segIdx = i + 1;
+      segTA = 0;
+      tool.position.copy(seg.p2);
+    } else {
+      const t = Math.max(0, target - accum);
+      segIdx = i;
+      segTA = t;
+      const dir = new THREE.Vector3().subVectors(seg.p2, seg.p1).normalize();
+      const pos = new THREE.Vector3().copy(seg.p1).addScaledVector(dir, t);
+      tool.position.copy(pos);
+      break;
+    }
+  }
+  traveled = target;
+  updateProgress();
+}
+</script>
+{% endblock %}

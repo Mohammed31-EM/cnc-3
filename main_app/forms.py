@@ -1,6 +1,8 @@
 # main_app/forms.py
 from django import forms
 from .models import Job, Attachment
+from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import UserCreationForm
 
 
 class JobForm(forms.ModelForm):
@@ -40,3 +42,13 @@ class AttachmentForm(forms.ModelForm):
         if file and file.size > 10 * 1024 * 1024:  # 10 MB limit
             raise forms.ValidationError("Attachment file is too large (max 10MB).")
         return file
+    
+
+User = get_user_model()
+
+class SignupForm(UserCreationForm):
+    email = forms.EmailField(required=False)
+
+    class Meta:
+        model = User
+        fields = ("username", "email", "password1", "password2")

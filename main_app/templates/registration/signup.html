@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Create account</h2>
+
+{% if form.errors %}
+  <p style="color:#f87171">Please fix the errors below.</p>
+{% endif %}
+
+<form method="post" action="{% url 'signup' %}">
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+
+  <label>Username</label>
+  {{ form.username.errors }}
+  {{ form.username }}
+
+  <label>Email (optional)</label>
+  {{ form.email.errors }}
+  {{ form.email }}
+
+  <label>Password</label>
+  {{ form.password1.errors }}
+  {{ form.password1 }}
+
+  <label>Confirm password</label>
+  {{ form.password2.errors }}
+  {{ form.password2 }}
+
+  {% if next %}
+    <input type="hidden" name="next" value="{{ next }}">
+  {% endif %}
+
+  <button class="btn" type="submit">Sign up</button>
+</form>
+
+<p style="margin-top:1rem">
+  Already have an account?
+  <a href="{% url 'login' %}{% if next %}?next={{ next }}{% endif %}">Sign in</a>
+</p>
+{% endblock %}

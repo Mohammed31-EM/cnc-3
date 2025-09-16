@@ -2,26 +2,32 @@
 {% block content %}
 <h2>Sign in</h2>
 
-{% if form.errors %}
-  <p style="color:#f87171">Invalid username or password.</p>
-{% endif %}
-
-<form method="post" action="{% url 'login' %}">
-  {% csrf_token %}
-  {{ form.non_field_errors }}
-  <label>Username</label>
-  {{ form.username }}
-  <label>Password</label>
-  {{ form.password }}
-  {% if next %}
-    <input type="hidden" name="next" value="{{ next }}">
+{% if user.is_authenticated %}
+  <p>You’re already signed in as <strong>{{ user.username }}</strong>.</p>
+  <p><a class="btn" href="{% url 'program_list' %}">Go to dashboard</a></p>
+  <form method="post" action="{% url 'logout' %}" style="margin-top:1rem">
+    {% csrf_token %}
+    <button type="submit" class="link-btn">Logout</button>
+  </form>
+{% else %}
+  {% if form.errors %}
+    <p style="color:#f87171">Invalid username or password.</p>
   {% endif %}
-  <button class="btn" type="submit">Login</button>
-</form>
 
-<form method="post" action="{% url 'logout' %}" style="margin-top:1rem">
-  {% csrf_token %}
-  <button type="submit" class="link-btn">Logout</button>
-</form>
+  <form method="post" action="{% url 'login' %}">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <label>Username</label>
+    {{ form.username }}
+    <label>Password</label>
+    {{ form.password }}
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    <button class="btn" type="submit">Login</button>
+  </form>
 
+  <p style="margin-top:1rem">
+    Don’t have an account?
+    <a href="{% url 'signup' %}{% if next %}?next={{ next }}{% endif %}">Create one</a>
+  </p>
+{% endif %}
 {% endblock %}

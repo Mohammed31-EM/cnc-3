@@ -6,6 +6,7 @@ import mimetypes
 
 from django import forms
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import login as auth_login
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
@@ -14,14 +15,14 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse, reverse_lazy
 from django.utils.html import mark_safe
 from django.utils.text import slugify
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_http_methods
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
 from .models import Program, Job, Machine, Material, RunLog, ProgramVersion, Attachment
-from .forms import JobForm, AttachmentForm
+from .forms import JobForm, AttachmentForm, SignupForm
 
 # --- Upload constraints ---
 ALLOWED_EXT = {".nc", ".gcode", ".tap"}
@@ -768,3 +769,19 @@ def attachment_delete(request, pk):
 def program_preview(request, pk):
     program = get_object_or_404(Program, pk=pk, owner=request.user)
     return render(request, "main_app/program_preview.html", {"program": program})
+
+
+
+
+@require_http_methods(["GET", "POST"])
+def signup(request):
+    next_url = request.GET.get("next") or request.POST.get("next") or "/"
+    if request.method == "POST":
+        form = SignupForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            auth_login(request, user)  # auto-login after signup
+            return redirect(next_url)
+    else:
+        form = SignupForm()
+    return render(request, "registration/signup.html", {"form": form, "next": next_url})

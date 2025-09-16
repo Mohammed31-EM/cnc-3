@@ -27,7 +27,7 @@ class Program(models.Model):
     class Meta:
         ordering = ["-created_at"]
 
-    def _str_(self):
+    def __str__(self):
         rev = f" {self.revision}" if self.revision else ""
         return f"{self.part_no}{rev}"
 

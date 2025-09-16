@@ -33,4 +33,7 @@ urlpatterns = [
     path("jobs/<int:job_id>/attachments/add/", views.attachment_upload, name="attachment_add"),
     path("attachments/<int:pk>/download/", views.attachment_download, name="attachment_download"),
     path("attachments/<int:pk>/delete/", views.attachment_delete, name="attachment_delete"),
+
+    path("ai/chat/", views.ai_chat, name="ai_chat"),
+    path("ai/program/<int:pk>/", views.ai_chat_for_program, name="ai_chat_for_program"),
 ]

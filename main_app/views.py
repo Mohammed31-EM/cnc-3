@@ -24,6 +24,16 @@ from reportlab.pdfgen import canvas
 from .models import Program, Job, Machine, Material, RunLog, ProgramVersion, Attachment
 from .forms import JobForm, AttachmentForm, SignupForm
 
+import json
+from django.views.decorators.http import require_POST
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt  
+from .services.deepseek import chat as ds_chat
+from django.conf import settings
+from openai import OpenAI
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
+
 # --- Upload constraints ---
 ALLOWED_EXT = {".nc", ".gcode", ".tap"}
 MAX_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -785,3 +795,45 @@ def signup(request):
     else:
         form = SignupForm()
     return render(request, "registration/signup.html", {"form": form, "next": next_url})
+
+
+# --- AI: DeepSeek chat endpoint ---
+
+
+@csrf_exempt          
+@require_POST
+def ai_chat(request):
+    try:
+        prompt = request.POST.get("prompt")
+        if not prompt and request.body:
+            prompt = json.loads(request.body.decode("utf-8")).get("prompt")
+        if not prompt:
+            return JsonResponse({"error": "Missing 'prompt'."}, status=400)
+
+        reply = ds_chat([
+            {"role": "system", "content": "You are a helpful assistant for CNC workflows."},
+            {"role": "user",   "content": prompt},
+        ])
+        return JsonResponse({"reply": reply})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+    
+
+@login_required
+@require_POST
+def ai_chat_for_program(request, pk):
+    prog = get_object_or_404(Program, pk=pk, owner=request.user)
+    raw = _program_bytes(prog)
+    text = raw.decode("utf-8", "ignore")
+    snippet = text[:8000]  # cap tokens
+    user_prompt = (json.loads(request.body.decode("utf-8")).get("prompt") or "").strip()
+
+    client = OpenAI(api_key=settings.DEEPSEEK_API_KEY, base_url=settings.DEEPSEEK_BASE_URL)
+    msgs = [
+        {"role":"system","content":"You are a CNC manufacturing assistant. Be concise and practical."},
+        {"role":"system","content":f"Program: {prog.part_no} {prog.revision} | units={prog.units} abs={prog.abs_mode} bbox={prog.bbox_json}"},
+        {"role":"system","content":"G-code (truncated):\n" + snippet},
+        {"role":"user","content":user_prompt or "Review the program and highlight any red flags."}
+    ]
+    rsp = client.chat.completions.create(model=settings.DEEPSEEK_MODEL, messages=msgs, stream=False)
+    return JsonResponse({"reply": rsp.choices[0].message.content})

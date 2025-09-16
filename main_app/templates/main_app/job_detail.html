@@ -67,6 +67,81 @@
   </ul>
 {% endif %}
 
+<h3>Ask AI about this program</h3>
+
+<style>
+  .ai-row { display:flex; align-items:center; gap:.75rem; margin:.5rem 0; }
+  .ai-status { display:none; align-items:center; gap:.5rem; font-size:.95rem; opacity:.8; }
+  .ai-status.on { display:inline-flex; }
+  .loader {
+    width:1em; height:1em; border:.15em solid currentColor; border-right-color:transparent;
+    border-radius:50%; animation:ai-spin .8s linear infinite;
+  }
+  @keyframes ai-spin { to { transform: rotate(360deg); } }
+  .dots { display:inline-block; overflow:hidden; vertical-align:bottom; width:0ch; }
+  .dots.on { animation: ai-dots 1.2s steps(4,end) infinite; }
+  @keyframes ai-dots { 0% { width:0ch; } 100% { width:3ch; } }
+  .ai-output { white-space:pre-wrap; margin-top:.5rem; }
+</style>
+
+<textarea id="ai-q" rows="4" style="width:100%"
+  placeholder="Ask about feeds, safe Z, WCS, toolpath risks…"></textarea>
+
+<div class="ai-row">
+  <button id="ai-ask-btn" class="btn" type="button">Ask</button>
+  <div id="ai-status" class="ai-status">
+    <span class="loader"></span>
+    <span>Generating<span id="ai-dots" class="dots">...</span></span>
+  </div>
+</div>
+
+<pre id="ai-ans" class="ai-output"></pre>
+
+<script>
+// CSRF helper (Django)
+function getCookie(name) {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return m ? m.pop() : '';
+}
+
+async function aiAsk() {
+  const btn   = document.getElementById('ai-ask-btn');
+  const box   = document.getElementById('ai-status');
+  const dots  = document.getElementById('ai-dots');
+  const out   = document.getElementById('ai-ans');
+  const q     = document.getElementById('ai-q').value.trim();
+  if (!q) return;
+
+  // UI: show loader
+  btn.disabled = true;
+  out.textContent = '';
+  box.classList.add('on');
+  dots.classList.add('on');
+
+  try {
+    const resp = await fetch("{% url 'ai_chat_for_program' object.program_id %}", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCookie('csrftoken')
+      },
+      body: JSON.stringify({ prompt: q })
+    });
+    const data = await resp.json();
+    out.textContent = data.reply || data.error || "(no reply)";
+  } catch (e) {
+    out.textContent = "Error: " + (e?.message || e);
+  } finally {
+    // UI: hide loader
+    box.classList.remove('on');
+    dots.classList.remove('on');
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('ai-ask-btn').addEventListener('click', aiAsk);
+</script>
+
 <h3>Attachments</h3>
 {% if attachments %}
   <ul>

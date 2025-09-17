@@ -1,16 +1,16 @@
 databases:
-  - name: mysitedb
+  - name: cnc3db
     plan: free
-    databaseName: mysite
-    user: mysite
+    databaseName: cnc3
+    user: cnc3
 
 services:
   - type: web
     plan: free
-    name: mysite
+    name: cnc3
     runtime: python
     buildCommand: './build.sh'
-    startCommand: 'python -m gunicorn mysite.asgi:application -k uvicorn.workers.UvicornWorker'
+    startCommand: 'python -m gunicorn cnc3.asgi:application -k uvicorn.workers.UvicornWorker'
     envVars:
       - key: DATABASE_URL
         fromDatabase:

@@ -14,7 +14,7 @@ Upload and manage **3-axis G-code programs**, preview toolpaths, generate printa
 
 ## 🔗 Live App & Planning
 
-- **Deployed URL:** https://YOUR-APP-URL.example.com  
+- **Deployed URL:** https://cnc3.onrender.com
 - **Planning materials:**
   - Wireframes: `docs/wireframes.pdf`
   - ERD: `docs/erd.png`

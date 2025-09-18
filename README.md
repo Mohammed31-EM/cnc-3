@@ -8,7 +8,7 @@ Upload and manage **3-axis G-code programs**, preview toolpaths, generate printa
 
 > Replace this placeholder with your screenshot/logo. Keep descriptive alt text.
 
-![CNC-3 app screenshot showing a toolpath backplot, program metadata, and navigation](docs/screenshot.png)
+![CNC-3 app](mian_app/static/images/image.png)
 
 ---
 

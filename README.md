@@ -1,116 +1,168 @@
 # CNC-3 — Three-Axis CNC Manager
 
-Upload and manage **3-axis G-code programs**, preview their toolpaths, and generate printable **setup sheets**. Create **Jobs** by binding a Program to a Machine and Material, then track status from **Draft → Submitted → Approved**. Built with **Django templates** (session auth, SSR), deployable on Render/Railway/Fly.
+Upload and manage **3-axis G-code programs**, preview toolpaths, generate printable **setup packets**, and track jobs from **Draft → Submitted → Approved**. CNC-3 also integrates **DeepSeek** so you can **chat**, **review**, and (optionally) **generate** G-code that’s auto-validated and saved as a Program.
 
 ---
 
-## Screenshot / Logo
+## 📸 Screenshot / Logo
 
-> Replace the image below with your own screenshot or logo (keep alt text).
+> Replace this placeholder with your screenshot/logo. Keep descriptive alt text.
 
-![CNC-3 app screenshot showing a 2D toolpath backplot, program metadata, and navigation sidebar](docs/screenshot.png)
+![CNC-3 app screenshot showing a toolpath backplot, program metadata, and navigation](docs/screenshot.png)
 
 ---
 
-## Live App
+## 🔗 Live App & Planning
 
 - **Deployed URL:** https://YOUR-APP-URL.example.com  
-- **Planning materials:**  
-  - Wireframes: `docs/wireframes.pdf`  
+- **Planning materials:**
+  - Wireframes: `docs/wireframes.pdf`
   - ERD: `docs/erd.png`
 
----
-
-## Why this app
-
-A focused CRUD app that demonstrates:
-- File uploads + server-side parsing (G-code).
-- Owner-scoped data (per-user) with session-based auth/authorization.
-- Accessible, consistent UI using CSS Grid/Flex.
-- Deployable, production-ready Django setup with static/media handling.
+> Replace the URL and files above with your own.
 
 ---
 
-## Features (MVP)
+## 🧰 What this app does (and why)
 
-- **Auth (session-based):** login/logout using Django auth.
-- **Authorization:** guests cannot create/update/delete; **only the owner** of a record sees Edit/Delete controls or can modify it.
-- **Entities (plus User):**
-  - **Program** (belongs to User): upload G-code; stored metadata (units/mm-in, abs/inc, bbox, time estimate, lints); 2D backplot viewer.
-  - **Job** (belongs to User): binds Program + Machine + Material; stock size, WCS, qty; status flow; printable setup sheet.
-  - **Machine:** caps like max RPM/feed, rapid rates, safe Z.
-  - **Material:** name, hardness, optional feeds/speeds table.
-- **Full CRUD:** Programs, Jobs, Machines, Materials (Machines/Materials can be admin-only).
-- **2D Backplot:** XY canvas view with dashed rapids (G0) and solid cuts (G1; optional arcs G2/G3).
-- **Lint checks (starter set):** safe-Z before XY rapid, coolant/spindle off at end, max feed/RPM vs machine, WCS set early.
-- **Setup Sheet:** print-styled HTML (PDF optional) with bbox/time/tooling summary.
+CNC-3 is a focused manufacturing helper for small shops and hobbyists:
 
----
+- **Programs**
+  - Upload `.nc` / `.gcode` / `.tap` (≤ 5 MB).
+  - Files stored in Postgres as **bytea blobs** (`file_blob`) with `file_name` + `file_mime`. (A `FileField` exists as an optional FS fallback.)
+  - Built-in parser extracts **units** (G20/G21), **mode** (G90/G91), **bbox**, **move counts**, **estimated time**, and **lint warnings** (e.g., no WCS, unsafe rapids, feed before cut).
+  - 2D backplot (XY): dashed rapids (G0) vs solid cuts (G1).
 
-## Meets GA Unit 4 Requirements
+- **Jobs**
+  - Binds a **Program** to a **Machine** and **Material**.
+  - Track **stock** (L/W/H in mm), **qty**, **WCS** (e.g., G54) and status: **draft → submitted → approved**.
+  - **RunLog** records actions (create/update/submit/approve).
 
-- **Frontend:** Django **templates** render UI (SSR).  
-- **DB:** SQLite (dev) / PostgreSQL (prod).  
-- **Auth:** Django session-based authentication.  
-- **Authorization:** guests blocked from create/update/delete; UI for edit/delete shown only to record owner.  
-- **Data entities:** Program, Job, Machine, Material (Program & Job relate to User).  
-- **Full CRUD:** implemented for at least two entities (Program, Job) plus Machine/Material.  
-- **Deployed:** hosted online (link above).  
+- **Setup Packets**
+  - Printable HTML & **PDF** (ReportLab) with program metadata, bbox, time, lints, stock, and machine/material info.
 
-### Code conventions & quality
-- Conventional Django layout, pluralized list names, no dead code/prints.
-- App runs without terminal or browser console errors.
-- Proper indentation and consistent style.
+- **DeepSeek**
+  - **/ai/chat/**: machining Q&A via LLM.
+  - **/ai/chat/program/<id>/**: program-aware review (sends truncated G-code and metadata for targeted feedback).
+  - *(Optional UI)* **/ai/generate/**: prompt → LLM returns fenced `gcode` → parsed, linted, and saved as a new Program.
 
-### UI/UX & Accessibility
-- Consistent theme (dark slate + blue accent), Grid/Flex layout.
-- Intuitive navigation via sidebar links; no manual URL typing needed.
-- WCAG 2.0 AA color contrast verified for text/background.
-- Edit forms are **pre-filled** with existing data.
-- Owner-only edit/delete UI.
-- All images have descriptive **alt** text.
-- No text over busy images that harms readability.
-- Styled buttons with visible focus states.
-
-### Git & GitHub
-- Single visible contributor on a **public** repo (e.g., `cnc-3`).
-- Commits from day 1 → presentation; descriptive messages.
-- If pivoting, keep old repo; don’t delete history.
+**Why built:** to demo owner-scoped CRUD, binary file storage in Postgres, a practical G-code parser, and a realistic way AI can assist CNC workflows.
 
 ---
 
-## Data Model (ERD)
+## 🗃️ Data Model (High-Level)
 
+- **Program** → `owner`, `part_no`, `revision`, `file_blob`, `file_name`, `file_mime`, `units`, `abs_mode`, `bbox_json`, `meta_json`, `est_time_s`, `created_at`
+- **ProgramVersion** → `program`, `file_blob`, `file_name`, `file_mime`, `comment`, `created_at`
+- **Job** → `owner`, `program`, `machine`, `material`, `stock_lwh_mm` (`{L,W,H}`), `qty`, `wcs`, `status`, `created_at`
+- **Machine** → `name`, `max_rpm`, `max_feed`, `rapid_xy`, `rapid_z`, `safe_z`
+- **Material** → `name`, `hardness`, `feedspeeds_json`
+- **RunLog** → `job`, `user`, `action`, `notes`, `ts`
+- **Attachment** → `job`, `file_blob` (+ optional `file`), `file_name`, `file_mime`, `uploaded_by`, `uploaded_at`
 
-**Program**: part_no, revision, file, units, abs_mode, bbox_json, meta_json, est_time_s, owner → User  
-**Job**: program → Program, machine → Machine, material → Material, stock_lwh_mm{L,W,H}, qty, wcs, status, owner → User  
-**Machine**: name, max_rpm, max_feed, rapid_xy, rapid_z, safe_z  
-**Material**: name, hardness, feedspeeds_json
-
----
-
-## Routes (high level)
-
-- **Auth:** `/auth/login`, `/auth/logout` (Django builtin)
-- **Programs:** `/` (list), `/programs/new`, `/programs/:id`, `/programs/:id/preview.json`
-- **Jobs:** `/jobs/` (list), `/jobs/new/:program_id`, `/jobs/:id`, `/jobs/:id/edit`, `/jobs/:id/delete`, `/jobs/:id/packet`
-- **Machines/Materials:** `/machines/…`, `/materials/…` (admin-only or owner-scoped)
+> DB-first storage (bytea) with optional filesystem fallback keeps deployments simple and portable.
 
 ---
 
-## Technology
+## 🧭 Routes (High Level)
 
-- **Backend:** Django 5 (templates, auth, CSRF, forms)
-- **Server:** Uvicorn (ASGI)
-- **DB:** SQLite (dev), PostgreSQL (prod)
+- **Auth** (Django built-ins):  
+  `/auth/login`, `/auth/logout`  
+  **Signup (custom):** `/signup`
+
+- **Programs:**  
+  `/` (list), `/programs/new`, `/programs/<id>`, `/programs/<id>/preview.json`, `/programs/<id>/edit`, `/programs/<id>/delete`  
+  `/programs/<id>/history`, `/programs/<id>/versions/<ver_id>/download`, `/programs/<id>/diff/<ver_id>`
+
+- **Jobs:**  
+  `/jobs/` (list), `/jobs/new/<program_id>`, `/jobs/<id>`, `/jobs/<id>/edit`, `/jobs/<id>/delete`,  
+  `/jobs/<id>/submit`, `/jobs/<id>/approve`, `/jobs/<id>/packet`, `/jobs/<id>/packet.pdf`, `/jobs/<id>/lint.json`
+
+- **Attachments:**  
+  `/jobs/<job_id>/attachments/new`, `/attachments/<id>/download`, `/attachments/<id>/delete`
+
+- **AI (DeepSeek):**  
+  `POST /ai/chat/`  
+  `POST /ai/chat/program/<id>/`
+
+- *(Optional UI)* **AI Generate Program:**  
+  `/ai/generate/` (form + “Generating…” overlay) → POST to `/ai/chat/` → saves Program on success
+
+---
+
+## 🛠️ Technology
+
+- **Backend:** Django 5 (templates/SSR, forms, auth, CSRF)
+- **DB:** PostgreSQL (prod) / SQLite (dev)
 - **Static/Media:** WhiteNoise + Django staticfiles
-- **Frontend:** Server-rendered HTML + vanilla JS canvas backplot
-- **Dev tools:** Python 3.11+, venv
+- **PDF:** ReportLab
+- **AI:** DeepSeek via OpenAI Python SDK (custom `base_url`)
+- **Frontend:** Server-rendered HTML + lightweight JS (canvas backplot)
+- **Runtime:** Python 3.11+
 
 ---
 
-## Getting Started
+## 🔒 Auth & Authorization
 
-### Prerequisites
-- Python **3.11+**
-- (Prod) A PostgreSQL database URL
+- **Auth:** Django sessions.
+- **Authorization:** all lists are **owner-scoped**; only the **owner** sees Edit/Delete and can modify a record.
+- **CSRF:** enabled site-wide; JSON endpoints expect `application/json`.
+- **Admin:** use `/admin/` (superuser).
+
+---
+
+## 🧪 Lints (examples)
+
+- No G20/G21 units
+- No G90/G91 mode
+- No work offset (G54..G59)
+- Cut before feedrate set
+- Cut before spindle on (M3/M4)
+- Rapid Z below machine **safe Z**
+- Job stock bounds exceeded (XY or Z)
+
+*Lints appear in Program metadata and in Job packet views.*
+
+---
+
+## 🧯 Troubleshooting
+
+- **PowerShell JSON error:** Use `ConvertTo-Json` as shown in README examples.
+- **“DEEPSEEK_API_KEY is not set”:** Confirm `.env` and restart the server.
+- **Program upload shows but preview fails:** Ensure the file is text G-code (UTF-8 or ASCII). Max **5 MB**.
+- **Admin login didn’t work:** Rerun `python manage.py createsuperuser`.
+
+---
+
+## 📚 Attributions
+
+- Django
+- ReportLab (PDF)
+- OpenAI Python SDK *(used with a custom `base_url` for DeepSeek)*
+- DeepSeek API  
+- Any icons, images, or fonts used in `/static` or `/docs` should retain their original licenses.
+
+---
+
+## 🧱 Technologies Used
+
+- Python 3.11+, Django 5
+- PostgreSQL (prod), SQLite (dev)
+- WhiteNoise, ReportLab
+- OpenAI Python SDK + DeepSeek
+- Vanilla JS (canvas backplot), HTML/CSS (SSR)
+
+---
+
+## 🗺️ Next Steps (Stretch Goals)
+
+- Arc support in parser/backplot (G2/G3 preview with approximated segments).
+- Tool table + multi-tool lints (spindle RPM/feed checks vs material & tool geometry).
+- Collision/safe-Z simulator: highlight potential workholding collisions and red-zone rapids.
+- Versioning UX: “Save as new version” on edit, visual diff overlay in the backplot.
+- **AI Generate UI:** prompt → fenced `gcode` → validate → save Program (with a live **Generating…** overlay).
+- Shop floor mode: QR code job packets and kiosk-style “Run / Pause / Log issue” flow.
+- Export: zipped job packet (PDF + G-code + setup JSON).
+- S3 / GCS storage option for large files.
+
+
